@@ -1,5 +1,5 @@
 //
-//  SessionStateProvider.swift
+//  SessionDelegate.swift
 //
 //  Copyright (c) 2014-2018 Alamofire Software Foundation (http://alamofire.org/)
 //
@@ -24,11 +24,15 @@
 
 import Foundation
 
-public protocol SessionStateProvider: AnyObject {
+protocol SessionStateProvider: AnyObject {
+    var serverTrustManager: ServerTrustManager? { get }
+    var redirectHandler: RedirectHandler? { get }
+    var cachedResponseHandler: CachedResponseHandler? { get }
+
     func request(for task: URLSessionTask) -> Request?
     func didCompleteTask(_ task: URLSessionTask)
-    var serverTrustManager: ServerTrustManager? { get }
-    func credential(for task: URLSessionTask, protectionSpace: URLProtectionSpace) -> URLCredential?
+    func credential(for task: URLSessionTask, in protectionSpace: URLProtectionSpace) -> URLCredential?
+    func cancelRequestsForSessionInvalidation(with error: Error?)
 }
 
 open class SessionDelegate: NSObject {
@@ -45,6 +49,8 @@ open class SessionDelegate: NSObject {
 extension SessionDelegate: URLSessionDelegate {
     open func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
         eventMonitor?.urlSession(session, didBecomeInvalidWithError: error)
+
+        stateProvider?.cancelRequestsForSessionInvalidation(with: error)
     }
 }
 
@@ -104,7 +110,7 @@ extension SessionDelegate: URLSessionTaskDelegate {
             return (.rejectProtectionSpace, nil, nil)
         }
 
-        guard let credential = stateProvider?.credential(for: task, protectionSpace: challenge.protectionSpace) else {
+        guard let credential = stateProvider?.credential(for: task, in: challenge.protectionSpace) else {
             return (.performDefaultHandling, nil, nil)
         }
 
@@ -145,7 +151,11 @@ extension SessionDelegate: URLSessionTaskDelegate {
                          completionHandler: @escaping (URLRequest?) -> Void) {
         eventMonitor?.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: request)
 
-        completionHandler(request)
+        if let redirectHandler = stateProvider?.request(for: task)?.redirectHandler ?? stateProvider?.redirectHandler {
+            redirectHandler.task(task, willBeRedirectedTo: request, for: response, completion: completionHandler)
+        } else {
+            completionHandler(request)
+        }
     }
 
     open func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
@@ -185,7 +195,11 @@ extension SessionDelegate: URLSessionDataDelegate {
                          completionHandler: @escaping (CachedURLResponse?) -> Void) {
         eventMonitor?.urlSession(session, dataTask: dataTask, willCacheResponse: proposedResponse)
 
-        completionHandler(proposedResponse)
+        if let handler = stateProvider?.request(for: dataTask)?.cachedResponseHandler ?? stateProvider?.cachedResponseHandler {
+            handler.dataTask(dataTask, willCacheResponse: proposedResponse, completion: completionHandler)
+        } else {
+            completionHandler(proposedResponse)
+        }
     }
 }
 
